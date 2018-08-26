@@ -22,6 +22,12 @@ let config = {
 };
 
 /**
+ * Variables
+ */
+let domains = [];
+let detected = [];
+
+/**
  * Functions
  */
 const saveConfig = () => {
@@ -64,6 +70,7 @@ const isDomainWhitelisted = (domain) => {
 
 const addDomainToWhitelist = (domain, time) => {
     if (!domain) return;
+    time = +time || 0;
 
     // Make sure the domain is not already whitelisted before adding it
     if (!isDomainWhitelisted(domain)) {
@@ -89,6 +96,18 @@ const runBlocker = (blacklist) => {
     const blacklistedUrls = blacklist.split('\n');
 
     chrome.webRequest.onBeforeRequest.addListener(details => {
+        chrome.browserAction.setBadgeBackgroundColor({
+            color: [200, 0, 0, 100],
+            tabId: details.tabId,
+        });
+        
+        chrome.browserAction.setBadgeText({
+            text: '!',
+            tabId: details.tabId,
+        });
+
+        detected[details.tabId] = true;
+
         // Globally paused
         if (!config.toggle) {
             return { cancel: false };
@@ -96,8 +115,18 @@ const runBlocker = (blacklist) => {
 
         // Is domain white listed
         if (isDomainWhitelisted(domains[details.tabId])) {
+            chrome.browserAction.setIcon({
+                path: 'img/logo_enabled_whitelisted.png',
+                tabId: details.tabId,
+            });
+
             return { cancel: false };
         }
+
+        chrome.browserAction.setIcon({
+            path: 'img/logo_enabled_blocked.png',
+            tabId: details.tabId,
+        });
 
         return { cancel: true };
     }, { 
@@ -115,11 +144,27 @@ const runFallbackBlocker = () => {
 /**
  * Main
  */
-let domains = [];
 
 // Updating domain for synchronous checking in onBeforeRequest
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     domains[tabId] = getDomain(tab.url);
+    
+    // Set back to normal when navigating
+    if (changeInfo === 'loading') {
+        if (config.toggle) {
+            chrome.browserAction.setIcon({
+                path: 'img/logo_enabled.png',
+                tabId,
+            });
+        }
+
+        detected[details.tabId] = false;
+    
+        chrome.browserAction.setBadgeText({
+            text: '',
+            tabId,
+        });
+    }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -135,11 +180,17 @@ if (!config.toggle) {
 const blacklist = 'https://raw.githubusercontent.com/keraf/NoCoin/master/src/blacklist.txt';
 fetch(blacklist)
     .then(resp => {
-        if (resp.status === 200) {
-            resp.text().then(text => runBlocker(text));
-        } else {
-            runFallbackBlocker();
+        if (resp.status !== 200) {
+            throw 'HTTP Error';
         }
+
+        resp.text().then((text) => {
+            if (text === '') {
+                throw 'Empty response';
+            }
+
+            runBlocker(text);
+        });
     })
     .catch(err => {
         runFallbackBlocker();
@@ -150,7 +201,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
         case 'GET_STATE':
             sendResponse({
+                version: chrome.runtime.getManifest().version,
                 whitelisted: isDomainWhitelisted(domains[message.tabId]),
+                domain: domains[message.tabId],
+                detected: detected[message.tabId] || false,
                 toggle: config.toggle,
             });
             break;
